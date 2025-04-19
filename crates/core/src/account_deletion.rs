@@ -157,7 +157,7 @@ pub trait AccountDeletionPipes: Send + Sync {
     /// Returns a `CarbonResult<()>`, which is `Ok` on success, or an error if
     /// processing fails.
     async fn run(
-        &mut self,
+        &self,
         account_deletion: AccountDeletion,
         metrics: Arc<MetricsCollection>,
     ) -> CarbonResult<()>;
@@ -166,7 +166,7 @@ pub trait AccountDeletionPipes: Send + Sync {
 #[async_trait]
 impl AccountDeletionPipes for AccountDeletionPipe {
     async fn run(
-        &mut self,
+        &self,
         account_deletion: AccountDeletion,
         metrics: Arc<MetricsCollection>,
     ) -> CarbonResult<()> {

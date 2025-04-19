@@ -188,7 +188,7 @@ pub struct AccountPipe<T: Send> {
 #[async_trait]
 pub trait AccountPipes: Send + Sync {
     async fn run(
-        &mut self,
+        &self,
         account_with_metadata: (AccountMetadata, solana_account::Account),
         metrics: Arc<MetricsCollection>,
     ) -> CarbonResult<()>;
@@ -197,7 +197,7 @@ pub trait AccountPipes: Send + Sync {
 #[async_trait]
 impl<T: Send> AccountPipes for AccountPipe<T> {
     async fn run(
-        &mut self,
+        &self,
         account_with_metadata: (AccountMetadata, solana_account::Account),
         metrics: Arc<MetricsCollection>,
     ) -> CarbonResult<()> {

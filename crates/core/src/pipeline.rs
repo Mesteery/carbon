@@ -72,6 +72,11 @@ use {
         transformers,
     },
     core::time,
+    futures::{
+        future::{try_join, try_join_all},
+        stream::try_unfold,
+        TryStreamExt,
+    },
     serde::de::DeserializeOwned,
     std::{convert::TryInto, sync::Arc, time::Instant},
     tokio_util::sync::CancellationToken,
@@ -324,7 +329,7 @@ impl Pipeline {
     ///   `metrics_flush_interval`.
     /// - The `run` method operates in an infinite loop, handling updates until
     ///   a termination condition occurs.
-    pub async fn run(&mut self) -> CarbonResult<()> {
+    pub async fn run(&self) -> CarbonResult<()> {
         log::info!("starting pipeline. num_datasources: {}, num_metrics: {}, num_account_pipes: {}, num_account_deletion_pipes: {}, num_instruction_pipes: {}, num_transaction_pipes: {}",
             self.datasources.len(),
             self.metrics.metrics.len(),
@@ -337,7 +342,7 @@ impl Pipeline {
         log::trace!("run(self)");
 
         self.metrics.initialize_metrics().await?;
-        let (update_sender, mut update_receiver) =
+        let (update_sender, update_receiver) =
             tokio::sync::mpsc::channel::<Update>(self.channel_buffer_size);
 
         let datasource_cancellation_token = self
@@ -371,78 +376,96 @@ impl Pipeline {
             self.metrics_flush_interval.unwrap_or(5),
         ));
 
-        loop {
-            tokio::select! {
-                _ = tokio::signal::ctrl_c() => {
-                    log::trace!("received SIGINT, shutting down.");
-                    datasource_cancellation_token.cancel();
+        let update_stream = try_unfold(
+            (update_receiver, interval, datasource_cancellation_token),
+            |(mut update_receiver, mut interval, datasource_cancellation_token)| async move {
+                loop {
+                    tokio::select! {
+                        _ = tokio::signal::ctrl_c() => {
+                            log::trace!("received SIGINT, shutting down.");
+                            datasource_cancellation_token.cancel();
 
-                    if self.shutdown_strategy == ShutdownStrategy::Immediate {
-                        log::info!("shutting down the pipeline immediately.");
-                        self.metrics.flush_metrics().await?;
-                        self.metrics.shutdown_metrics().await?;
-                        break;
-                    } else {
-                        log::info!("shutting down the pipeline after processing pending updates.");
-                    }
-                }
-                _ = interval.tick() => {
-                    self.metrics.flush_metrics().await?;
-                }
-                update = update_receiver.recv() => {
-                    match update {
-                        Some(update) => {
-                            self
-                                .metrics.increment_counter("updates_received", 1)
-                                .await?;
+                            if self.shutdown_strategy == ShutdownStrategy::Immediate {
+                                log::info!("shutting down the pipeline immediately.");
+                                break;
+                            } else {
+                                log::info!("shutting down the pipeline after processing pending updates.");
+                            }
+                        },
 
-                            let start = Instant::now();
-                            let process_result = self.process(update.clone()).await;
-                            let time_taken_nanoseconds = start.elapsed().as_nanos();
-                            let time_taken_milliseconds = time_taken_nanoseconds / 1_000_000;
-
-                            self
-                                .metrics
-                                .record_histogram("updates_process_time_nanoseconds", time_taken_nanoseconds as f64)
-                                .await?;
-
-                            self
-                                .metrics
-                                .record_histogram("updates_process_time_milliseconds", time_taken_milliseconds as f64)
-                                .await?;
-
-                            match process_result {
-                                Ok(_) => {
-                                    self
-                                        .metrics.increment_counter("updates_successful", 1)
-                                        .await?;
-
-                                    log::trace!("processed update")
-                                }
-                                Err(error) => {
-                                    log::error!("error processing update ({:?}): {:?}", update, error);
-                                    self.metrics.increment_counter("updates_failed", 1).await?;
-                                }
-                            };
-
-                            self
-                                .metrics.increment_counter("updates_processed", 1)
-                                .await?;
-
-                            self
-                                .metrics.update_gauge("updates_queued", update_receiver.len() as f64)
-                                .await?;
-                        }
-                        None => {
-                            log::info!("update_receiver closed, shutting down.");
+                        _ = interval.tick() => {
                             self.metrics.flush_metrics().await?;
-                            self.metrics.shutdown_metrics().await?;
+                        },
+
+                        Some(v) = update_receiver.recv() => {
+                            self.metrics
+                                .update_gauge("updates_queued", update_receiver.len() as f64)
+                                .await?;
+
+                            return CarbonResult::Ok(Some((v, (update_receiver, interval, datasource_cancellation_token))))
+                        },
+
+                        else => {
+                            log::info!("update_receiver closed, shutting down.");
                             break;
-                        }
+                        },
                     }
                 }
-            }
-        }
+
+                self.metrics.flush_metrics().await?;
+                self.metrics.shutdown_metrics().await?;
+
+                Ok(None)
+            },
+        );
+
+        update_stream
+            .try_for_each_concurrent(None, |update| async {
+                self.metrics
+                    .increment_counter("updates_received", 1)
+                    .await?;
+
+                let start = Instant::now();
+                let process_result = self.process(update).await;
+
+                let time_taken_nanoseconds = start.elapsed().as_nanos();
+                let time_taken_milliseconds = time_taken_nanoseconds / 1_000_000;
+
+                self.metrics
+                    .record_histogram(
+                        "updates_process_time_nanoseconds",
+                        time_taken_nanoseconds as f64,
+                    )
+                    .await?;
+
+                self.metrics
+                    .record_histogram(
+                        "updates_process_time_milliseconds",
+                        time_taken_milliseconds as f64,
+                    )
+                    .await?;
+
+                match process_result {
+                    Ok(_) => {
+                        self.metrics
+                            .increment_counter("updates_successful", 1)
+                            .await?;
+
+                        log::trace!("processed update")
+                    }
+                    Err(error) => {
+                        log::error!("error processing update: {:?}", error);
+                        self.metrics.increment_counter("updates_failed", 1).await?;
+                    }
+                };
+
+                self.metrics
+                    .increment_counter("updates_processed", 1)
+                    .await?;
+
+                Ok(())
+            })
+            .await?;
 
         log::info!("pipeline shutdown complete.");
 
@@ -498,7 +521,7 @@ impl Pipeline {
     /// Returns an error if any of the pipes fail during processing, or if an
     /// issue arises while incrementing counters or updating metrics. Handle
     /// errors gracefully to ensure continuous pipeline operation.
-    async fn process(&mut self, update: Update) -> CarbonResult<()> {
+    async fn process(&self, update: Update) -> CarbonResult<()> {
         log::trace!("process(self, update: {:?})", update);
         match update {
             Update::Account(account_update) => {
@@ -507,13 +530,13 @@ impl Pipeline {
                     pubkey: account_update.pubkey,
                 };
 
-                for pipe in self.account_pipes.iter_mut() {
+                try_join_all(self.account_pipes.iter().map(|pipe| {
                     pipe.run(
                         (account_metadata.clone(), account_update.account.clone()),
                         self.metrics.clone(),
                     )
-                    .await?;
-                }
+                }))
+                .await?;
 
                 self.metrics
                     .increment_counter("account_updates_processed", 1)
@@ -530,30 +553,34 @@ impl Pipeline {
 
                 let nested_instructions: NestedInstructions = instructions_with_metadata.into();
 
-                for pipe in self.instruction_pipes.iter_mut() {
-                    for nested_instruction in nested_instructions.iter() {
-                        pipe.run(nested_instruction, self.metrics.clone()).await?;
-                    }
-                }
+                let instruction_pipes =
+                    try_join_all(self.instruction_pipes.iter().flat_map(|pipe| {
+                        nested_instructions.iter().map(|nested_instruction| {
+                            pipe.run(nested_instruction, self.metrics.clone())
+                        })
+                    }));
 
-                for pipe in self.transaction_pipes.iter_mut() {
+                let transaction_pipes = try_join_all(self.transaction_pipes.iter().map(|pipe| {
                     pipe.run(
                         transaction_metadata.clone(),
                         &nested_instructions,
                         self.metrics.clone(),
                     )
-                    .await?;
-                }
+                }));
+
+                try_join(instruction_pipes, transaction_pipes).await?;
 
                 self.metrics
                     .increment_counter("transaction_updates_processed", 1)
                     .await?;
             }
             Update::AccountDeletion(account_deletion) => {
-                for pipe in self.account_deletion_pipes.iter_mut() {
-                    pipe.run(account_deletion.clone(), self.metrics.clone())
-                        .await?;
-                }
+                try_join_all(
+                    self.account_deletion_pipes
+                        .iter()
+                        .map(|pipe| pipe.run(account_deletion.clone(), self.metrics.clone())),
+                )
+                .await?;
 
                 self.metrics
                     .increment_counter("account_deletions_processed", 1)
