@@ -25,6 +25,7 @@ use {
         transaction::TransactionMetadata,
     },
     async_trait::async_trait,
+    futures::future::try_join_all,
     serde::{Deserialize, Serialize},
     solana_instruction::AccountMeta,
     solana_pubkey::Pubkey,
@@ -153,7 +154,7 @@ pub struct InstructionPipe<T: Send> {
 #[async_trait]
 pub trait InstructionPipes<'a>: Send + Sync {
     async fn run(
-        &mut self,
+        &self,
         nested_instruction: &NestedInstruction,
         metrics: Arc<MetricsCollection>,
     ) -> CarbonResult<()>;
@@ -162,7 +163,7 @@ pub trait InstructionPipes<'a>: Send + Sync {
 #[async_trait]
 impl<T: Send + 'static> InstructionPipes<'_> for InstructionPipe<T> {
     async fn run(
-        &mut self,
+        &self,
         nested_instruction: &NestedInstruction,
         metrics: Arc<MetricsCollection>,
     ) -> CarbonResult<()> {
@@ -187,9 +188,15 @@ impl<T: Send + 'static> InstructionPipes<'_> for InstructionPipe<T> {
                 .await?;
         }
 
-        for nested_inner_instruction in nested_instruction.inner_instructions.iter() {
-            self.run(nested_inner_instruction, metrics.clone()).await?;
-        }
+        try_join_all(
+            nested_instruction
+                .inner_instructions
+                .iter()
+                .map(|nested_inner_instruction| {
+                    self.run(nested_inner_instruction, metrics.clone())
+                }),
+        )
+        .await?;
 
         Ok(())
     }

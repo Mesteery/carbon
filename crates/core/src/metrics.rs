@@ -24,7 +24,10 @@
 //! implementations to perform non-blocking I/O operations, such as network
 //! requests or database writes.
 
-use {crate::error::CarbonResult, async_trait::async_trait, std::sync::Arc};
+use {
+    crate::error::CarbonResult, async_trait::async_trait, futures::future::try_join_all,
+    std::sync::Arc,
+};
 
 #[async_trait]
 pub trait Metrics: Send + Sync {
@@ -74,44 +77,47 @@ impl MetricsCollection {
     }
 
     pub async fn initialize_metrics(&self) -> CarbonResult<()> {
-        for metric in &self.metrics {
-            metric.initialize().await?;
-        }
+        try_join_all(self.metrics.iter().map(|metric| metric.initialize())).await?;
         Ok(())
     }
 
     pub async fn shutdown_metrics(&self) -> CarbonResult<()> {
-        for metric in &self.metrics {
-            metric.shutdown().await?;
-        }
+        try_join_all(self.metrics.iter().map(|metric| metric.shutdown())).await?;
         Ok(())
     }
 
     pub async fn flush_metrics(&self) -> CarbonResult<()> {
-        for metric in &self.metrics {
-            metric.flush().await?;
-        }
+        try_join_all(self.metrics.iter().map(|metric| metric.flush())).await?;
         Ok(())
     }
 
     pub async fn update_gauge(&self, name: &str, value: f64) -> CarbonResult<()> {
-        for metric in &self.metrics {
-            metric.update_gauge(name, value).await?;
-        }
+        try_join_all(
+            self.metrics
+                .iter()
+                .map(|metric| metric.update_gauge(name, value)),
+        )
+        .await?;
         Ok(())
     }
 
     pub async fn increment_counter(&self, name: &str, value: u64) -> CarbonResult<()> {
-        for metric in &self.metrics {
-            metric.increment_counter(name, value).await?;
-        }
+        try_join_all(
+            self.metrics
+                .iter()
+                .map(|metric| metric.increment_counter(name, value)),
+        )
+        .await?;
         Ok(())
     }
 
     pub async fn record_histogram(&self, name: &str, value: f64) -> CarbonResult<()> {
-        for metric in &self.metrics {
-            metric.record_histogram(name, value).await?;
-        }
+        try_join_all(
+            self.metrics
+                .iter()
+                .map(|metric| metric.record_histogram(name, value)),
+        )
+        .await?;
         Ok(())
     }
 }

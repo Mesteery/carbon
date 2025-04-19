@@ -271,7 +271,7 @@ pub trait TransactionPipes<'a>: Send + Sync {
     ///
     /// A `CarbonResult<()>` indicating success or failure.
     async fn run(
-        &mut self,
+        &self,
         transaction_metadata: Arc<TransactionMetadata>,
         instructions: &[NestedInstruction],
         metrics: Arc<MetricsCollection>,
@@ -285,7 +285,7 @@ where
     U: DeserializeOwned + Send + Sync + 'static,
 {
     async fn run(
-        &mut self,
+        &self,
         transaction_metadata: Arc<TransactionMetadata>,
         instructions: &[NestedInstruction],
         metrics: Arc<MetricsCollection>,
