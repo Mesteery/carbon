@@ -1184,6 +1184,7 @@ dependencies = [
  "carbon-macros",
  "carbon-proc-macros",
  "carbon-test-utils",
+ "futures",
  "log",
  "serde",
  "serde_json",

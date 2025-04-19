@@ -102,7 +102,7 @@ pub trait BlockDetailsPipes: Send + Sync {
     /// Returns a `CarbonResult<()>`, which is `Ok` on success, or an error if
     /// processing fails.
     async fn run(
-        &mut self,
+        &self,
         block_details: BlockDetails,
         metrics: Arc<MetricsCollection>,
     ) -> CarbonResult<()>;
@@ -111,7 +111,7 @@ pub trait BlockDetailsPipes: Send + Sync {
 #[async_trait]
 impl BlockDetailsPipes for BlockDetailsPipe {
     async fn run(
-        &mut self,
+        &self,
         block_details: BlockDetails,
         metrics: Arc<MetricsCollection>,
     ) -> CarbonResult<()> {

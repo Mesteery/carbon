@@ -7,7 +7,7 @@ use {
         error::CarbonResult,
         metrics::MetricsCollection,
     },
-    futures::{sink::SinkExt, StreamExt},
+    futures::{sink::SinkExt, stream::unfold, StreamExt, TryStreamExt},
     solana_account::Account,
     solana_pubkey::Pubkey,
     solana_signature::Signature,
@@ -17,7 +17,7 @@ use {
         sync::Arc,
         time::Duration,
     },
-    tokio::sync::{mpsc::Sender, RwLock},
+    tokio::sync::{mpsc::Sender, Mutex, RwLock},
     tokio_util::sync::CancellationToken,
     yellowstone_grpc_client::GeyserGrpcClient,
     yellowstone_grpc_proto::{
@@ -28,7 +28,7 @@ use {
             SubscribeRequestFilterTransactions, SubscribeRequestPing, SubscribeUpdateAccountInfo,
             SubscribeUpdateTransactionInfo,
         },
-        tonic::transport::ClientTlsConfig,
+        tonic::{transport::ClientTlsConfig, Status},
     },
 };
 
@@ -118,83 +118,124 @@ impl Datasource for YellowstoneGrpcGeyserClient {
                 from_slot: None,
             };
 
-            loop {
-                tokio::select! {
-                    _ = cancellation_token.cancelled() => {
-                        log::info!("Cancelling Yellowstone gRPC subscription.");
-                        break;
+            let result = tokio::select! {
+                _ = cancellation_token.cancelled() => {
+                    log::info!("Cancelling Yellowstone gRPC subscription.");
+                    return;
+                }
+
+                result = geyser_client.subscribe_with_request(Some(subscribe_request.clone())) =>
+                    result
+            };
+
+            let (subscribe_tx, stream) = match result {
+                Ok(r) => r,
+                Err(e) => {
+                    log::error!("Failed to subscribe: {:?}", e);
+                    return;
+                }
+            };
+
+            let subscribe_tx = Arc::new(Mutex::new(subscribe_tx));
+
+            let stream = unfold(
+                (stream, cancellation_token),
+                |(mut stream, cancellation_token)| async move {
+                    tokio::select! {
+                        _ = cancellation_token.cancelled() => {
+                            log::info!("Cancelling Yellowstone gRPC subscription.");
+                            None
+                        },
+                        Some(v) = stream.next() => Some((v, (stream, cancellation_token))),
+                        else => None,
                     }
-                    result = geyser_client.subscribe_with_request(Some(subscribe_request.clone())) => {
-                        match result {
-                            Ok((mut subscribe_tx, mut stream)) => {
-                                while let Some(message) = stream.next().await {
-                                    match message {
-                                        Ok(msg) => match msg.update_oneof {
-                                            Some(UpdateOneof::Account(account_update)) => {
-                                                send_subscribe_account_update_info(
-                                                    account_update.account,
-                                                    &metrics,
-                                                    &sender,
-                                                    account_update.slot,
-                                                    &account_deletions_tracked,
-                                                )
-                                                .await
-                                            }
+                },
+            );
 
-                                            Some(UpdateOneof::Transaction(transaction_update)) => {
-                                                send_subscribe_update_transaction_info(transaction_update.transaction, &metrics, &sender, transaction_update.slot, None).await
-                                            }
-                                            Some(UpdateOneof::Block(block_update)) => {
-                                                let block_time = block_update.block_time.map(|ts| ts.timestamp);
+            if let Err(e) = stream
+                .try_for_each_concurrent(None, |message| async {
+                    match message.update_oneof {
+                        Some(UpdateOneof::Account(account_update)) => {
+                            send_subscribe_account_update_info(
+                                account_update.account,
+                                &metrics,
+                                &sender,
+                                account_update.slot,
+                                &account_deletions_tracked,
+                            )
+                            .await
+                        }
 
-                                                for transaction_update in block_update.transactions {
-                                                    if retain_block_failed_transactions || transaction_update.meta.as_ref().map(|meta| meta.err.is_none()).unwrap_or(false) {
-                                                        send_subscribe_update_transaction_info(Some(transaction_update), &metrics, &sender, block_update.slot, block_time).await
-                                                    }
-                                                }
+                        Some(UpdateOneof::Transaction(transaction_update)) => {
+                            send_subscribe_update_transaction_info(
+                                transaction_update.transaction,
+                                &metrics,
+                                &sender,
+                                transaction_update.slot,
+                                None,
+                            )
+                            .await
+                        }
+                        Some(UpdateOneof::Block(block_update)) => {
+                            let block_time = block_update.block_time.map(|ts| ts.timestamp);
 
-                                                for account_info in block_update.accounts {
-                                                    send_subscribe_account_update_info(
-                                                        Some(account_info),
-                                                        &metrics,
-                                                        &sender,
-                                                        block_update.slot,
-                                                        &account_deletions_tracked,
-                                                    )
-                                                    .await;
-                                                }
-                                            }
-
-                                            Some(UpdateOneof::Ping(_)) => {
-                                                match subscribe_tx
-                                                    .send(SubscribeRequest {
-                                                        ping: Some(SubscribeRequestPing { id: 1 }),
-                                                        ..Default::default()
-                                                    })
-                                                    .await {
-                                                        Ok(()) => (),
-                                                        Err(error) => {
-                                                            log::error!("Failed to send ping error: {error:?}");
-                                                            break;
-                                                        },
-                                                    }
-                                            }
-
-                                            _ => {}
-                                        },
-                                        Err(error) => {
-                                            log::error!("Geyser stream error: {error:?}");
-                                            break;
-                                        }
-                                    }
+                            for transaction_update in block_update.transactions {
+                                if retain_block_failed_transactions
+                                    || transaction_update
+                                        .meta
+                                        .as_ref()
+                                        .map(|meta| meta.err.is_none())
+                                        .unwrap_or(false)
+                                {
+                                    send_subscribe_update_transaction_info(
+                                        Some(transaction_update),
+                                        &metrics,
+                                        &sender,
+                                        block_update.slot,
+                                        block_time,
+                                    )
+                                    .await
                                 }
                             }
-                            Err(e) => {
-                                log::error!("Failed to subscribe: {:?}", e);
+
+                            for account_info in block_update.accounts {
+                                send_subscribe_account_update_info(
+                                    Some(account_info),
+                                    &metrics,
+                                    &sender,
+                                    block_update.slot,
+                                    &account_deletions_tracked,
+                                )
+                                .await;
                             }
                         }
-                    }
-                }
+
+                        Some(UpdateOneof::Ping(_)) => {
+                            match subscribe_tx
+                                .lock()
+                                .await
+                                .send(SubscribeRequest {
+                                    ping: Some(SubscribeRequestPing { id: 1 }),
+                                    ..Default::default()
+                                })
+                                .await
+                            {
+                                Ok(()) => (),
+                                Err(error) => {
+                                    log::error!("Failed to send ping error: {error:?}");
+                                    return Err(Status::aborted("Failed to send ping"));
+                                }
+                            }
+                        }
+
+                        _ => {}
+                    };
+
+                    Ok(())
+                })
+                .await
+            {
+                log::error!("Geyser stream error: {e:?}");
             }
         });
 

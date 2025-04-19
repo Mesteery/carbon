@@ -587,7 +587,7 @@ impl Pipeline {
                     .await?;
             }
             Update::BlockDetails(block_details) => {
-                for pipe in self.block_details_pipes.iter_mut() {
+                for pipe in self.block_details_pipes.iter() {
                     pipe.run(block_details.clone(), self.metrics.clone())
                         .await?;
                 }
