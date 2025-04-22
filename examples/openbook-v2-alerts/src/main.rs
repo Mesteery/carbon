@@ -59,7 +59,7 @@ impl Processor for OpenbookV2InstructionProcessor {
     );
 
     async fn process(
-        &mut self,
+        &self,
         (metadata, instruction, _nested_instructions): Self::InputType,
         _metrics: Arc<MetricsCollection>,
     ) -> CarbonResult<()> {

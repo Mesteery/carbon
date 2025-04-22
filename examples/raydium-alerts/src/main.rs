@@ -97,7 +97,7 @@ impl Processor for RaydiumAmmV4InstructionProcessor {
     );
 
     async fn process(
-        &mut self,
+        &self,
         (metadata, instruction, _nested_instructions): Self::InputType,
         _metrics: Arc<MetricsCollection>,
     ) -> CarbonResult<()> {
@@ -197,7 +197,7 @@ impl Processor for RaydiumAmmV4AccountProcessor {
     type InputType = (AccountMetadata, DecodedAccount<RaydiumAmmV4Account>);
 
     async fn process(
-        &mut self,
+        &self,
         data: Self::InputType,
         _metrics: Arc<MetricsCollection>,
     ) -> CarbonResult<()> {

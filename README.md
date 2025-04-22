@@ -180,7 +180,7 @@ impl Processor for MyAccountProcessor {
     type InputType = AccountProcessorInputType<MyCustomAccountData>;
 
     async fn process(
-        &mut self,
+        &self,
         input: Self::InputType,
         metrics: Arc<MetricsCollection>,
     ) -> CarbonResult<()> {
