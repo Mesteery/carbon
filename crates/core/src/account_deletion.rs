@@ -108,7 +108,7 @@ pub struct AccountDeletionPipe {
 /// #[async_trait]
 /// impl AccountDeletionPipes for AccountDeletionPipe {
 ///     async fn run(
-///         &mut self,
+///         &self,
 ///         account_deletion: AccountDeletion,
 ///         metrics: Arc<MetricsCollection>,
 ///     ) -> CarbonResult<()> {

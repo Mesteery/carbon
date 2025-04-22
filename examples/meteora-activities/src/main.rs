@@ -64,7 +64,7 @@ impl Processor for MeteoraInstructionProcessor {
     );
 
     async fn process(
-        &mut self,
+        &self,
         data: Self::InputType,
         _metrics: Arc<MetricsCollection>,
     ) -> CarbonResult<()> {

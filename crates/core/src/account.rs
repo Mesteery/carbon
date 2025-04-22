@@ -170,7 +170,7 @@ pub struct AccountPipe<T: Send> {
 /// #[async_trait]
 /// impl AccountPipes for MyAccountPipe {
 ///     async fn run(
-///         &mut self,
+///         &self,
 ///         account_with_metadata: (AccountMetadata, solana_account::Account),
 ///         metrics: Arc<MetricsCollection>,
 ///     ) -> CarbonResult<()> {

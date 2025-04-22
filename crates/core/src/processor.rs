@@ -92,7 +92,7 @@ use {
 ///     type InputType = DataType;
 ///
 ///     async fn process(
-///         &mut self,
+///         &self,
 ///         data: Self::InputType,
 ///         metrics: Arc<MetricsCollection>,
 ///     ) -> CarbonResult<()> {
