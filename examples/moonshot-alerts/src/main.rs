@@ -64,7 +64,7 @@ impl Processor for MoonshotInstructionProcessor {
     );
 
     async fn process(
-        &mut self,
+        &self,
         (metadata, instruction, _nested_instructions, _): Self::InputType,
         _metrics: Arc<MetricsCollection>,
     ) -> CarbonResult<()> {

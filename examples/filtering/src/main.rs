@@ -130,7 +130,7 @@ impl Processor for KaminoLendingInstructionProcessor {
     );
 
     async fn process(
-        &mut self,
+        &self,
         (metadata, instruction, _nested_instructions, _): Self::InputType,
         _metrics: Arc<MetricsCollection>,
     ) -> CarbonResult<()> {
@@ -162,7 +162,7 @@ impl Processor for KaminoLendingRealtimeAccountProcessor {
     );
 
     async fn process(
-        &mut self,
+        &self,
         data: Self::InputType,
         metrics: Arc<MetricsCollection>,
     ) -> CarbonResult<()> {
@@ -223,7 +223,7 @@ impl Processor for KaminoLendingStartupAccountProcessor {
     );
 
     async fn process(
-        &mut self,
+        &self,
         data: Self::InputType,
         metrics: Arc<MetricsCollection>,
     ) -> CarbonResult<()> {

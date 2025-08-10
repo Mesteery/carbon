@@ -62,7 +62,7 @@ impl Processor for PumpfunInstructionProcessor {
     type InputType = InstructionProcessorInputType<PumpfunInstruction>;
 
     async fn process(
-        &mut self,
+        &self,
         data: Self::InputType,
         _metrics: Arc<MetricsCollection>,
     ) -> CarbonResult<()> {
