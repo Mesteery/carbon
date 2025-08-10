@@ -154,7 +154,7 @@ impl Processor for TokenProgramAccountProcessor {
     );
 
     async fn process(
-        &mut self,
+        &self,
         data: Self::InputType,
         _metrics: Arc<MetricsCollection>,
     ) -> CarbonResult<()> {
@@ -188,7 +188,7 @@ impl Processor for TokenProgramInstructionProcessor {
     type InputType = InstructionProcessorInputType<TokenProgramInstruction>;
 
     async fn process(
-        &mut self,
+        &self,
         data: Self::InputType,
         _metrics: Arc<MetricsCollection>,
     ) -> CarbonResult<()> {

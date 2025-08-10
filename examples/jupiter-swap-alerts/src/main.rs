@@ -95,7 +95,7 @@ impl Processor for JupiterSwapInstructionProcessor {
         solana_instruction::Instruction,
     );
     async fn process(
-        &mut self,
+        &self,
         (metadata, instruction, nested_instructions, _): Self::InputType,
         _metrics: Arc<MetricsCollection>,
     ) -> CarbonResult<()> {
