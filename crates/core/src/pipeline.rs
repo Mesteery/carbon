@@ -50,6 +50,8 @@
 //! - Proper metric collection and flushing are essential for monitoring
 //!   pipeline performance, especially in production environments.
 
+use futures::future::try_join_all;
+
 use crate::block_details::{BlockDetailsPipe, BlockDetailsPipes};
 use crate::datasource::{BlockDetails, DatasourceId};
 use crate::filter::Filter;
@@ -527,21 +529,24 @@ impl Pipeline {
                     transaction_signature: account_update.transaction_signature,
                 };
 
-                for pipe in self.account_pipes.iter_mut() {
-                    if pipe.filters().iter().all(|filter| {
-                        filter.filter_account(
-                            &datasource_id,
-                            &account_metadata,
-                            &account_update.account,
-                        )
-                    }) {
-                        pipe.run(
-                            (account_metadata.clone(), account_update.account.clone()),
-                            self.metrics.clone(),
-                        )
-                        .await?;
-                    }
-                }
+                try_join_all(self.account_pipes.iter().filter_map(|pipe| {
+                    pipe.filters()
+                        .iter()
+                        .all(|filter| {
+                            filter.filter_account(
+                                &datasource_id,
+                                &account_metadata,
+                                &account_update.account,
+                            )
+                        })
+                        .then(|| {
+                            pipe.run(
+                                (account_metadata.clone(), account_update.account.clone()),
+                                self.metrics.clone(),
+                            )
+                        })
+                }))
+                .await?;
 
                 self.metrics
                     .increment_counter("account_updates_processed", 1)
@@ -558,32 +563,37 @@ impl Pipeline {
 
                 let nested_instructions: NestedInstructions = instructions_with_metadata.into();
 
-                for pipe in self.instruction_pipes.iter_mut() {
-                    for nested_instruction in nested_instructions.iter() {
-                        if pipe.filters().iter().all(|filter| {
-                            filter.filter_instruction(&datasource_id, nested_instruction)
-                        }) {
-                            pipe.run(nested_instruction, self.metrics.clone()).await?;
-                        }
-                    }
-                }
+                let ix_futures = self.instruction_pipes.iter().flat_map(|pipe| {
+                    nested_instructions.iter().filter_map(|nested_instruction| {
+                        pipe.filters()
+                            .iter()
+                            .all(|filter| {
+                                filter.filter_instruction(&datasource_id, &nested_instruction)
+                            })
+                            .then(|| pipe.run(nested_instruction, self.metrics.clone()))
+                    })
+                });
 
-                for pipe in self.transaction_pipes.iter_mut() {
-                    if pipe.filters().iter().all(|filter| {
-                        filter.filter_transaction(
-                            &datasource_id,
-                            &transaction_metadata,
-                            &nested_instructions,
-                        )
-                    }) {
-                        pipe.run(
-                            transaction_metadata.clone(),
-                            &nested_instructions,
-                            self.metrics.clone(),
-                        )
-                        .await?;
-                    }
-                }
+                let tx_futures = self.transaction_pipes.iter().filter_map(|pipe| {
+                    pipe.filters()
+                        .iter()
+                        .all(|filter| {
+                            filter.filter_transaction(
+                                &datasource_id,
+                                &transaction_metadata,
+                                &nested_instructions,
+                            )
+                        })
+                        .then(|| {
+                            pipe.run(
+                                transaction_metadata.clone(),
+                                &nested_instructions,
+                                self.metrics.clone(),
+                            )
+                        })
+                });
+
+                try_join_all(ix_futures.chain(tx_futures)).await?;
 
                 self.metrics
                     .increment_counter("transaction_updates_processed", 1)

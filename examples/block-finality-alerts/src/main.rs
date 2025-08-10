@@ -51,7 +51,7 @@ impl Processor for BlockProcessor {
     type InputType = BlockDetails;
 
     async fn process(
-        &mut self,
+        &self,
         block_details: Self::InputType,
         _metrics: Arc<MetricsCollection>,
     ) -> CarbonResult<()> {

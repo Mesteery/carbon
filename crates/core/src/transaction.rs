@@ -275,7 +275,7 @@ pub fn parse_instructions<T: InstructionDecoderCollection>(
 #[async_trait]
 pub trait TransactionPipes<'a>: Send + Sync {
     async fn run(
-        &mut self,
+        &self,
         transaction_metadata: Arc<TransactionMetadata>,
         instructions: &[NestedInstruction],
         metrics: Arc<MetricsCollection>,
@@ -291,7 +291,7 @@ where
     U: DeserializeOwned + Send + Sync + 'static,
 {
     async fn run(
-        &mut self,
+        &self,
         transaction_metadata: Arc<TransactionMetadata>,
         instructions: &[NestedInstruction],
         metrics: Arc<MetricsCollection>,
